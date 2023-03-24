@@ -1,0 +1,40 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Card from '../components/Card.astro';
+import type { Track } from '../../../server/generated/client';
+
+const response = await fetch('http://127.0.0.1:3000');
+const data = await response.json();
+console.log('$$$ data:', { data });
+---
+
+<Layout title='Welcome to Astro.'>
+  <ul>
+    {
+      data.map((track: Track) => (
+        <li>
+          <a
+            target='_blank'
+            href={`http://beatport.com/track/${track.title.replace(
+              /\s+/g,
+              '-'
+            )}/${track.beatportTrackId}`}
+          >
+            <p>{track.title}</p>
+          </a>
+          <audio src={track.previewSong} controls>
+            Your browser does not support the audio element.
+          </audio>
+        </li>
+      ))
+    }
+  </ul>
+</Layout>
+
+<style>
+  main {
+    margin: auto;
+    padding: 1.5rem;
+    max-width: 60ch;
+  }
+</style>

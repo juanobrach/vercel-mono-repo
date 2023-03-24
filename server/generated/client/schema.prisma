@@ -1,0 +1,50 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Track {
+  id              Int      @id @default(autoincrement())
+  beatportTrackId String   @unique
+  title           String   @db.VarChar(255)
+  key             String?
+  label           Label?   @relation(fields: [labelId], references: [id])
+  labelId         Int?
+  genre           Genre?   @relation(fields: [genreId], references: [id])
+  genreId         Int?
+  previewSong     String?
+  length          String?  @db.VarChar(255)
+  bpm             Int?
+  released        String?  @db.VarChar(255)
+  artwork         String?
+  artists         Artist[]
+}
+
+model Label {
+  id              Int     @id @default(autoincrement())
+  name            String  @db.VarChar(255)
+  beatportLabelId String  @unique
+  Track           Track[]
+}
+
+model Genre {
+  id              Int     @id @default(autoincrement())
+  name            String  @db.VarChar(255)
+  beatportGenreId String  @unique
+  Track           Track[]
+}
+
+model Artist {
+  id               Int     @id @default(autoincrement())
+  name             String  @db.VarChar(255)
+  beatportArtistId String  @unique
+  Track            Track[]
+}
