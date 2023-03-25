@@ -16,10 +16,15 @@ export class TrackService {
     const { skip, take, cursor, where, orderBy } = params;
     return this.prisma.track.findMany({
       skip,
-      take,
+      take: take || 1000,
       cursor,
       where,
       orderBy,
+      include: {
+        artists: true,
+        genre: true,
+        label: true,
+      },
     });
   }
   //   async user(

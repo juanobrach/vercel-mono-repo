@@ -1,30 +1,13 @@
-export interface ITrack {
-  title?: string;
-  remixed?: string;
-  beatportTrackId?: string;
-  key?: string;
-  genre?: IGenre;
-  preview_song?: string;
-  length?: string;
-  released?: string;
-  artist?: IArtist;
-  label?: ILabel;
-  bpm?: string;
+import { Artist, Genre, Label, Track } from '../generated/client';
+
+export interface IScrapProps {
+  url: string;
+  fileName: string;
 }
 
-interface IArtist {
-  name: string;
-  tracks: ITrack[];
-}
-
-interface ILabel {
-  name: string;
-  beatportLabelId: string;
-  tracks?: ITrack[];
-}
-
-interface IGenre {
-  name: string;
-  beatportGenreId: string;
-  tracks?: ITrack[];
-}
+// Write a type for tracks included all their relations
+export type ITrack = Track & {
+  genre: Genre;
+  label: Label;
+  artists: Artist[];
+};

@@ -1,40 +1,71 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import Card from '../components/Card.astro';
 import type { Track } from '../../../server/generated/client';
+import _ from 'lodash';
+import { TracksComponent } from '../components/Tracks';
+import { serverPath } from '../constants';
 
-const response = await fetch('http://127.0.0.1:3000');
+const response = await fetch(serverPath);
 const data = await response.json();
-console.log('$$$ data:', { data });
+
+const gropupedTracks = _.chain(data)
+  // Group the elements of Array based on `color` property
+  .groupBy('key')
+  // `key` is group's name (color), `value` is the array of objects
+  .map((value: any, key: string) => ({ key, tracks: value }))
+  .value()
+  .sort((a, b) => {
+    if (a.key < b.key) {
+      return -1;
+    }
+    if (a.key > b.key) {
+      return 1;
+    }
+    return 0;
+  });
+
+const keys = _.uniq(_.map(data, 'key'));
+console.log(keys);
+
+// const returnTrack = (track: Track) => (
+//   <li>
+//     <img src={`${serverPath}/images/${track.beatportTrackId}.jpg`} />
+//     <a
+//       target='_blank'
+//       href={`http://beatport.com/track/${track.title.replace(/\s+/g, '-')}/${
+//         track.beatportTrackId
+//       }`}
+//     >
+//       <p>{track.title}</p>
+//     </a>
+//     <p>{track.key}</p>
+//     <audio src={`${serverPath}/tracks/${track.beatportTrackId}.wav`} controls>
+//       Your browser does not support the audio element.
+//     </audio>
+//   </li>
+// );
+
+// const path =  `${serverPath}/tracks/${track.beatportTrackId}.wav`
 ---
 
 <Layout title='Welcome to Astro.'>
-  <ul>
-    {
-      data.map((track: Track) => (
-        <li>
-          <a
-            target='_blank'
-            href={`http://beatport.com/track/${track.title.replace(
-              /\s+/g,
-              '-'
-            )}/${track.beatportTrackId}`}
-          >
-            <p>{track.title}</p>
-          </a>
-          <audio src={track.previewSong} controls>
-            Your browser does not support the audio element.
-          </audio>
-        </li>
-      ))
-    }
-  </ul>
+  <div>
+    <!-- <ul class='list-keys'>
+      {
+        // return a list of keys
+        keys.map((key) => {
+          const isActive = key === 'C maj' ? 'active' : '';
+          return (
+            <li class={`${isActive}`}>
+              <a href={`#${key}`}>
+                <p>{key}</p>
+              </a>
+            </li>
+          );
+        })
+      }
+    </ul>
+  </div> -->
+    <TracksComponent tracks={data} />
+  </div>
 </Layout>
-
-<style>
-  main {
-    margin: auto;
-    padding: 1.5rem;
-    max-width: 60ch;
-  }
-</style>

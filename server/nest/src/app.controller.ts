@@ -8,8 +8,8 @@ export class AppController {
 
   @Get()
   async getHello(): Promise<Track[]> {
-    const tracks = await this.trackService.tracks({});
+    const tracks = await this.trackService.tracks({ take: 2 });
     console.log(tracks.length);
-    return this.trackService.tracks({});
+    return this.trackService.tracks({ take: 1000 });
   }
 }

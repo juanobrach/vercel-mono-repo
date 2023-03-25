@@ -1,288 +1,281 @@
-import {
-  PrismaClient,
-  Track,
-  Prisma,
-  Label,
-  Genre,
-  Artist,
-} from '../generated/client';
+import { PrismaClient, Track, Prisma } from '../generated/client';
 
-import { BEATPORT_URL, GENRES, POINTERS } from './constants';
-import { getTracksURL, writeFile, getFile } from './utils';
+import { BEATPORT_URL, GENRES, POINTERS, GENRES_IDS } from './constants';
+import { getTracksURL, writeFile, getFile, saveMp3, slug } from './utils';
 import { gotScraping } from 'got-scraping';
 import fs from 'fs';
 import { load } from 'cheerio';
+import { IScrapProps, ITrack } from './types';
+import { saveImage } from './utils/image';
 
 const prisma = new PrismaClient();
+const CURRENT_PAGE = 2;
+const CURRENT_GENRE = GENRES.MINIMAL_DEEP_TECH;
+const CURRENT_GENRE_ID = GENRES_IDS[CURRENT_GENRE];
+const CURRENT_SOURCE = 'beatport';
+const FILE_NAME_TRACKS = `${CURRENT_GENRE}-${CURRENT_GENRE_ID}-${CURRENT_PAGE}`;
 
-const pagination = 1;
-const TRACKS_PER_PAGE = 50;
-const CURRENT_GENRE = GENRES.NU_DISCO;
-const FILE_NAME_TRACKS = `${CURRENT_GENRE}-${TRACKS_PER_PAGE}-${pagination}`;
+const scrapper = {
+  getTracksFromList: async (
+    body: string
+  ): Promise<Pick<ITrack, 'beatportTrackId' | 'title'>[]> => {
+    const $ = load(body);
+    const tracksIds = $('.bucket-items')
+      .children()
+      .map((i: any, li: any) => {
+        const beatportTrackId = $(li).attr('data-ec-id') || '';
+        const title = $(li).attr('data-ec-name') || '';
 
-interface IScrapProps {
-  url: string;
-  fileName: string;
-}
+        return {
+          beatportTrackId,
+          title,
+        };
+      })
+      .toArray();
 
-// Write a type for tracks included all their relations
-type ITrack = Track & {
-  genre: Genre;
-  label: Label;
-  artists: Artist[];
-};
+    return tracksIds;
+  },
+  getTrackDetails: async (body: string) => {
+    const $ = await load(body);
+    const trackId = $(POINTERS.TRACK_ID).attr('data-ec-id')!;
 
-// This function will map the tracks from the body.
-const mapTracksFromBody = (body: string): Prisma.TrackCreateInput[] => {
-  const $ = load(body);
-  const tracksObJ: Prisma.TrackCreateInput[] = $('.bucket-items')
-    .children()
-    .map((i: any, li: any) => {
-      const title = $(li).find('.buk-track-primary-title').text();
-      const beatportTrackId: string = $(li).attr('data-ec-id') || '';
-      const remixed = $(li).find('.buk-track-remixed').text();
-      const trackKey = $(li).find('.buk-track-key').text().replace(/\s/g, '');
-      // Genre
-      const genre = {
-        name: $(li).find('.buk-track-genre > a').text(),
-        beatportGenreId: $(li).find('.buk-track-genre > a').attr('data-genre'),
-      };
-
-      // Label
-      const label = {
-        name: $(li).find('.buk-track-labels').text().replace(/\s/g, ''),
-        beatportLabelId: $(li).find('.buk-track-labels > a').attr('data-label'),
-      };
-
-      // Artists
-      const artists = $(li)
-        .find('.buk-track-artists > a')
-        .toArray()
-        .map((el: any) => {
-          const obj = {
-            name: $(el).text(),
-            id: $(el).attr('data-artist'),
-          };
-          return obj;
-        });
-
-      return {
-        title,
-        beatportTrackId,
-        key: trackKey,
-        genre,
-        label,
-        artists,
-        remixed,
-      } as Prisma.TrackCreateInput;
-    })
-    .toArray();
-  return tracksObJ;
-};
-
-const saveTrackPreviewMp3 = async (track: Track) =>
-  prisma.track.update({
-    where: {
-      beatportTrackId: track.beatportTrackId ?? '',
-    },
-    data: {
-      previewSong: track.previewSong,
-    },
-  });
-
-const saveArtists = async (
-  artists: Prisma.ArtistCreateInput[],
-  beatportTrackId: string
-) => {
-  return prisma.track.update({
-    where: {
-      beatportTrackId,
-    },
-    data: {
-      artists: {
-        connectOrCreate: artists.map((artist) => ({
-          where: {
-            beatportArtistId: artist.beatportArtistId,
-          },
-          create: {
-            ...artist,
-          },
-        })),
+    const trackArtists = [
+      {
+        name: $(POINTERS.ARTISTS).text(),
+        beatportArtistId: $(POINTERS.ARTISTS).attr('data-artist') || '',
       },
-    },
-  });
+    ];
+
+    // Genre
+    const genre = {
+      name: $(POINTERS.GENRE).text() || '',
+      beatportGenreId: $(POINTERS.GENRE).attr('data-genre') || '',
+    };
+
+    // Label
+    const label = {
+      name: $(POINTERS.LABEL).text() || '',
+      beatportLabelId: $(POINTERS.LABEL).attr('data-label') || '',
+    };
+
+    const previewSong = $(POINTERS.PREVIEW_SONG).attr('content');
+
+    if (previewSong) {
+      await saveMp3({ trackId, previewSongUrl: previewSong });
+    }
+
+    const artworkUrl = $(POINTERS.ARTWORK).attr('src')!;
+    if (artworkUrl) {
+      await saveImage({ trackId, artworkUrl });
+    }
+
+    return {
+      key: $(POINTERS.KEY).text(),
+      bpm: Number($(POINTERS.BPM).text()),
+      length: $(POINTERS.LENGTH).text(),
+      released: $(POINTERS.RELEASED).text(),
+      previewSong,
+      artwork: $(POINTERS.ARTWORK).attr('src'),
+      artists: trackArtists,
+      label,
+      genre,
+    } as ITrack;
+  },
 };
 
-async function scrap({ url, fileName }: IScrapProps) {
-  if (fs.existsSync(`./cached/${fileName}.html`)) {
-    return getFile(fileName);
-  }
-  // Get the body from the URL.
-  const { body } = await gotScraping.get(url);
-  writeFile(body, fileName);
-  return body;
-}
-
-const scrapTracks = async () => {
-  const body = await scrap({
-    url: getTracksURL({ page: pagination, genre: GENRES.MINIMAL_DEEP_TECH }),
-    fileName: FILE_NAME_TRACKS,
-  });
-
-  const tracks = mapTracksFromBody(body);
-
-  // search more data of the tracks from another scrap call
-  const tracksWithMoreData = await Promise.all(
-    tracks.map(async (track: any) => {
-      const trackWithMoreData = await scrapTrack({
-        title: track.title as string,
-        beatportTrackId: track.beatportTrackId,
-      });
-      return trackWithMoreData;
-    })
-  );
-
-  // fs.writeFileSync(
-  //   `./cached/tracks-${pagination}.json`,
-  //   JSON.stringify(tracks)
-  // );
-
-  return tracksWithMoreData;
-};
-
-const scrapTrack = async (
-  trackInput: Prisma.TrackCreateInput
-): Promise<Prisma.TrackCreateInput> => {
-  const body = await scrap({
-    url: `${BEATPORT_URL}/track/${trackInput.title.replace(/\s+/g, '-')}/${
-      trackInput.beatportTrackId
-    }`,
-    fileName: `track-${trackInput.beatportTrackId}`,
-  });
-
-  const $ = await load(body);
-
-  const trackArtists = [
-    {
-      name: $(POINTERS.ARTISTS).text(),
-      beatportArtistId: $(POINTERS.ARTISTS).attr('data-artist') || '',
-    },
-  ];
-  const track = {
-    ...trackInput,
-    key: $(POINTERS.KEY).text(),
-    bpm: Number($(POINTERS.BPM).text()),
-    length: $(POINTERS.LENGTH).text(),
-    released: $(POINTERS.RELEASED).text(),
-    previewSong: $(POINTERS.PREVIEW_SONG).attr('content'),
-    artwork: $(POINTERS.ARTWORK).attr('src'),
-  } as Track;
-
-  await saveTrackPreviewMp3(track);
-  await saveArtists(trackArtists, track.beatportTrackId);
-  return track;
-};
-
-const saveTracks = async (tracks: Prisma.TrackCreateInput[]) => {
-  tracks.forEach(async (track: any) => {
-    const trackExists = await prisma.track.findUnique({
-      where: {
-        beatportTrackId: track.beatportTrackId,
-      },
-    });
-
-    if (trackExists) {
-      console.log('Track already exists, update', track.beatportTrackId);
-      await prisma.track.update({
+const db = {
+  saveTracks: async (tracks: ITrack[]) => {
+    tracks.forEach(async (track: ITrack) => {
+      const trackExists = await prisma.track.findUnique({
         where: {
           beatportTrackId: track.beatportTrackId,
         },
-        data: {
-          genre: {
-            connectOrCreate: {
-              where: {
-                beatportGenreId: track.genre.beatportGenreId || '',
-              },
-              create: {
-                name: track.genre.name,
-                beatportGenreId: track.genre.beatportGenreId || '',
-              },
-            },
-          },
-          label: {
-            connectOrCreate: {
-              where: {
-                beatportLabelId: track.label.beatportLabelId || '',
-              },
-              create: {
-                name: track.label.name,
-                beatportLabelId: track.label.beatportLabelId || '',
-              },
-            },
-          },
-        },
       });
-    } else {
-      console.log('Track does not exist, create', track.beatportTrackId);
-      await prisma.track.create({
-        data: {
-          title: track.title,
-          key: track.key,
-          beatportTrackId: track.beatportTrackId,
-          genre: {
-            connectOrCreate: {
-              where: {
-                beatportGenreId: track.genre.beatportGenreId || '',
-              },
-              create: {
-                name: track.genre.name,
-                beatportGenreId: track.genre.beatportGenreId || '',
+
+      if (trackExists) {
+        console.log('Track exist update', track.beatportTrackId);
+        console.log(track.title);
+        // build a string link to the track simple page on beatport
+        const trackUrl = `${BEATPORT_URL}/track/${slug(track.title)}/${
+          track.beatportTrackId
+        }`;
+        console.log(trackUrl);
+        await prisma.track.update({
+          where: {
+            beatportTrackId: track.beatportTrackId,
+          },
+          data: {
+            bpm: track.bpm,
+            released: track.released,
+            length: track.length,
+            artwork: track.artwork,
+            previewSong: track.previewSong,
+            genre: {
+              connectOrCreate: {
+                where: {
+                  beatportGenreId: track.genre.beatportGenreId,
+                },
+                create: {
+                  name: track.genre.name,
+                  beatportGenreId: track.genre.beatportGenreId,
+                },
               },
             },
-          },
-          label: {
-            connectOrCreate: {
-              where: {
-                beatportLabelId: track.label.beatportLabelId || '',
+
+            // If track contain label beatport id update it
+            ...(track.label.beatportLabelId && {
+              label: {
+                connectOrCreate: {
+                  where: {
+                    beatportLabelId: track.label.beatportLabelId,
+                  },
+                  create: {
+                    name: track.label.name,
+                    beatportLabelId: track.label.beatportLabelId,
+                  },
+                },
               },
-              create: {
-                name: track.label.name,
-                beatportLabelId: track.label.beatportLabelId || '',
+            }),
+
+            ...(track.artists.length && {
+              artists: {
+                connectOrCreate: track.artists.map((artist: any) => ({
+                  where: {
+                    beatportArtistId: artist.beatportArtistId,
+                  },
+                  create: {
+                    name: artist.name,
+                    beatportArtistId: artist.beatportArtistId,
+                  },
+                })),
+              },
+            }),
+          },
+        });
+      } else {
+        console.log('Track does not exist, create', track.beatportTrackId);
+
+        try {
+          await prisma.track.create({
+            data: {
+              title: track.title,
+              key: track.key,
+              beatportTrackId: track.beatportTrackId,
+              bpm: track.bpm,
+              released: track.released,
+              length: track.length,
+              artwork: track.artwork,
+              previewSong: track.previewSong,
+              genre: {
+                connectOrCreate: {
+                  where: {
+                    beatportGenreId: track.genre.beatportGenreId,
+                  },
+                  create: {
+                    name: track.genre.name,
+                    beatportGenreId: track.genre.beatportGenreId,
+                  },
+                },
+              },
+              label: {
+                connectOrCreate: {
+                  where: {
+                    beatportLabelId: track.label.beatportLabelId.toLowerCase(),
+                  },
+                  create: {
+                    name: track.label.name,
+                    beatportLabelId: track.label.beatportLabelId.toLowerCase(),
+                  },
+                },
+              },
+              artists: {
+                connectOrCreate: track.artists.map((artist: any) => ({
+                  where: {
+                    beatportArtistId: artist.beatportArtistId,
+                  },
+                  create: {
+                    name: artist.name,
+                    beatportArtistId: artist.beatportArtistId,
+                  },
+                })),
               },
             },
-          },
-        },
-      });
-    }
-  });
+          });
+        } catch (error) {
+          // return the error in a friendly format
+          console.log(error);
+        }
+      }
+    });
+  },
 };
 
-const getTracksWithoutPreviewSong = async () => {
-  const tracks = await prisma.track.findMany({
-    where: {
-      previewSong: null,
-    },
+async function scrap({ url, fileName }: IScrapProps) {
+  if (fs.existsSync(`./scrap/cached/${fileName}.html`)) {
+    return getFile(fileName);
+  } else {
+    const { body } = await gotScraping.get(url);
+    writeFile(body, fileName, 'utf-8');
+    return body;
+  }
+}
+
+const scrapTracksList = async () => {
+  const body = await scrap({
+    url: getTracksURL({ page: CURRENT_PAGE, genre: CURRENT_GENRE }),
+    fileName: `${FILE_NAME_TRACKS}.html`,
   });
-  return tracks;
+
+  return body;
+};
+
+const scrapTrackPage = async (
+  trackInput: Pick<Track, 'beatportTrackId' | 'title'>
+): Promise<string> => {
+  const body = await scrap({
+    url: `${BEATPORT_URL}/track/${slug(trackInput.title)}/${
+      trackInput.beatportTrackId
+    }`,
+    fileName: `track-${trackInput.beatportTrackId}.html`,
+  });
+
+  return body;
+};
+
+const getTracks = async () => {
+  const tracksListBody = await scrapTracksList();
+  const tracksData = await scrapper.getTracksFromList(tracksListBody);
+  const tracks = await Promise.all(
+    tracksData.map(async (trackData) => {
+      const trackBody = await scrapTrackPage({
+        title: trackData.title,
+        beatportTrackId: trackData.beatportTrackId,
+      });
+      const trackDetail = await scrapper.getTrackDetails(trackBody);
+      // console.log('$$$ trackDetail:', { trackDetail });
+      const track = {
+        ...trackData,
+        ...trackDetail,
+      };
+      return track;
+    })
+  );
+  return tracks as ITrack[];
+};
+
+const testSaveImage = async () => {
+  saveImage({
+    artworkUrl:
+      'https://geo-media.beatport.com/image_size/1400x1400/0089dc3d-7b5f-489b-8c37-e682857ca810.jpg',
+    trackId: '17435596',
+  });
 };
 
 async function init() {
-  const tracks = await scrapTracks();
-  const track0 = tracks[0];
-  // await saveTracks(tracks);
-  await scrapTrack(track0);
-  // const tracks = await getTracksWithoutPreviewSong();
-  // scrap every tracks without preview song
+  const tracks = await getTracks();
+  await db.saveTracks(tracks);
 
-  // Scrap all tracks
-  // await Promise.all(
-  //   tracks.map(async (track: any) => {
-  //     await scrapTrack({
-  //       title: track.title as string,
-  //       beatportTrackId: track.beatportTrackId,
-  //     });
-  //   })
-  // );
+  //await testSaveImage();
 }
 
 init();
